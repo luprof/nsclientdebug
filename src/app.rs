@@ -31,6 +31,8 @@ pub struct NetskopeLogAnalyzerApp {
     active_tab: Tab,
     search_filter: String,
     level_filter: Option<LogLevel>,
+    start_time_filter: String,
+    end_time_filter: String,
     status_message: String,
     dark_mode: bool,
 }
@@ -69,6 +71,8 @@ impl NetskopeLogAnalyzerApp {
             active_tab: Tab::Summary,
             search_filter: String::new(),
             level_filter: None,
+            start_time_filter: String::new(),
+            end_time_filter: String::new(),
             status_message: "Drag and drop Netskope debug log files anywhere or click 'Open Log Files'".to_string(),
             dark_mode: true,
         }
@@ -240,6 +244,30 @@ impl NetskopeLogAnalyzerApp {
         ui.separator();
     }
 
+    fn parse_time_filter(&self, input: &str) -> Option<chrono::NaiveTime> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Try HH:MM:SS
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(trimmed, "%H:%M:%S") {
+            return Some(t);
+        }
+
+        // Try HH:MM
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(trimmed, "%H:%M") {
+            return Some(t);
+        }
+
+        // Try HH:MM:SS.3f
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(trimmed, "%H:%M:%S%.f") {
+            return Some(t);
+        }
+
+        None
+    }
+
     fn render_summary_tab(&self, ui: &mut Ui) {
         ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(8.0);
@@ -405,11 +433,11 @@ impl NetskopeLogAnalyzerApp {
     fn render_log_explorer_tab(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label("Search:");
+            ui.label(RichText::new("Search:").strong());
             ui.text_edit_singleline(&mut self.search_filter);
 
             ui.separator();
-            ui.label("Level:");
+            ui.label(RichText::new("Level:").strong());
             if ui
                 .selectable_label(self.level_filter.is_none(), "ALL")
                 .clicked()
@@ -442,9 +470,35 @@ impl NetskopeLogAnalyzerApp {
             }
         });
 
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("⏱ Start Time:").strong());
+            ui.add(egui::TextEdit::singleline(&mut self.start_time_filter).hint_text("HH:MM:SS"));
+            if !self.start_time_filter.is_empty() {
+                if ui.small_button("✖").clicked() {
+                    self.start_time_filter.clear();
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.label(RichText::new("⏱ End Time:").strong());
+            ui.add(egui::TextEdit::singleline(&mut self.end_time_filter).hint_text("HH:MM:SS"));
+            if !self.end_time_filter.is_empty() {
+                if ui.small_button("✖").clicked() {
+                    self.end_time_filter.clear();
+                }
+            }
+
+            ui.separator();
+            ui.label(RichText::new("Filter format: HH:MM:SS or HH:MM").italics().color(Color32::GRAY));
+        });
+
         ui.add_space(8.0);
 
         let search_lower = self.search_filter.to_lowercase();
+        let start_time_opt = self.parse_time_filter(&self.start_time_filter);
+        let end_time_opt = self.parse_time_filter(&self.end_time_filter);
+
         let records_to_show: Vec<&LogRecord> = self
             .filtered_records
             .iter()
@@ -454,6 +508,19 @@ impl NetskopeLogAnalyzerApp {
                         return false;
                     }
                 }
+
+                let rec_time = r.timestamp.time();
+                if let Some(st) = start_time_opt {
+                    if rec_time < st {
+                        return false;
+                    }
+                }
+                if let Some(et) = end_time_opt {
+                    if rec_time > et {
+                        return false;
+                    }
+                }
+
                 if !search_lower.is_empty() {
                     return r.message.to_lowercase().contains(&search_lower)
                         || r.file_name.to_lowercase().contains(&search_lower)

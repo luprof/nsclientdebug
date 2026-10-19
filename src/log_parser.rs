@@ -9,7 +9,7 @@ static NPA_LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn get_log_regex() -> &'static Regex {
     LOG_REGEX.get_or_init(|| {
-        Regex::new(r"^(?P<year>\d{4})[/-](?P<month>\d{2})[/-](?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<min>\d{2}):(?P<sec>\d{2})(?:\.(?P<ms>\d+))?\s+(?:\S+\s+p\d+\s+t\d+\s+)?\[?(?P<level>[A-Za-z]+)\]?\s+(?:\[?(?P<pid>\d+):(?P<tid>\d+)\]?)?\s*(?:\[(?P<module>[^\]]+)\])?\s*(?P<msg>.*)$").unwrap()
+        Regex::new(r"^(?P<year>\d{4})[/-](?P<month>\d{2})[/-](?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<min>\d{2}):(?P<sec>\d{2})(?:\.(?P<ms>\d+))?\s+(?:\S+\s+p(?P<pid_prefix>\d+)\s+t(?P<tid_prefix>[a-fA-F0-9]+)\s+)?\[?(?P<level>[A-Za-z]+)\]?\s+(?:\[?(?P<pid>\d+):(?P<tid>\d+)\]?)?\s*(?:\[(?P<module>[^\]]+)\])?\s*(?P<msg>.*)$").unwrap()
     })
 }
 
@@ -56,8 +56,12 @@ pub fn parse_log_line(file_name: &str, line_number: usize, line: &str) -> Option
             _ => LogLevel::Info, // NPA logs often put tag/category in [tag], fallback to Info for unrecognized
         };
 
-        let pid = caps.name("pid").and_then(|m| m.as_str().parse().ok());
-        let tid = caps.name("tid").and_then(|m| m.as_str().parse::<u32>().ok().or_else(|| u32::from_str_radix(m.as_str(), 16).ok()));
+        let pid = caps.name("pid")
+            .or_else(|| caps.name("pid_prefix"))
+            .and_then(|m| m.as_str().parse().ok());
+        let tid = caps.name("tid")
+            .or_else(|| caps.name("tid_prefix"))
+            .and_then(|m| m.as_str().parse::<u32>().ok().or_else(|| u32::from_str_radix(m.as_str(), 16).ok()));
         let module = caps.name("module").map(|m| m.as_str().trim().to_string());
         let message = caps.name("msg").map(|m| m.as_str().trim().to_string()).unwrap_or_default();
 
@@ -164,5 +168,16 @@ mod tests {
         assert_eq!(rec.timestamp.to_string(), "2026-10-17 02:51:43.097");
         assert_eq!(rec.level, LogLevel::Info);
         assert!(rec.message.contains("GW FQDN = gateway.npa.goskope.com"));
+    }
+
+    #[test]
+    fn test_parse_process_hex_thread_log_line() {
+        let line = "2026/10/19 08:03:33.208536 stAgentNE p560 t25665315 error WifiStats.mm:538 WifiStats found error";
+        let rec = parse_log_line("nsdebuglog.log", 1, line).expect("Should parse process prefix log line with hex thread ID");
+
+        assert_eq!(rec.file_name, "nsdebuglog.log");
+        assert_eq!(rec.level, LogLevel::Error);
+        assert_eq!(rec.process_id, Some(560));
+        assert!(rec.message.contains("WifiStats found error"));
     }
 }
