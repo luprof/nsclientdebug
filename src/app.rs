@@ -1,4 +1,7 @@
-use egui::{Color32, RichText, ScrollArea, Ui};
+use egui::{
+    Color32, FontFamily, Frame, Margin, RichText, ScrollArea,
+    Stroke, TextStyle, Ui, Visuals,
+};
 use std::path::PathBuf;
 
 use crate::analyzer::{
@@ -29,10 +32,32 @@ pub struct NetskopeLogAnalyzerApp {
     search_filter: String,
     level_filter: Option<LogLevel>,
     status_message: String,
+    dark_mode: bool,
 }
 
 impl NetskopeLogAnalyzerApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Set clean font styles and sizes
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.text_styles.insert(
+            TextStyle::Heading,
+            egui::FontId::new(20.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Body,
+            egui::FontId::new(14.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            egui::FontId::new(13.0, FontFamily::Monospace),
+        );
+        style.text_styles.insert(
+            TextStyle::Button,
+            egui::FontId::new(14.0, FontFamily::Proportional),
+        );
+        cc.egui_ctx.set_style(style);
+        cc.egui_ctx.set_visuals(Visuals::dark());
+
         Self {
             loaded_files: Vec::new(),
             all_records: Vec::new(),
@@ -44,7 +69,8 @@ impl NetskopeLogAnalyzerApp {
             active_tab: Tab::Summary,
             search_filter: String::new(),
             level_filter: None,
-            status_message: "Drag and drop Netskope debug log files anywhere or click 'Open Files'".to_string(),
+            status_message: "Drag and drop Netskope debug log files anywhere or click 'Open Log Files'".to_string(),
+            dark_mode: true,
         }
     }
 
@@ -106,72 +132,88 @@ impl NetskopeLogAnalyzerApp {
         self.anomalies = detect_anomalies(&refs);
     }
 
-    fn render_header(&mut self, ui: &mut Ui) {
-        ui.vertical(|ui| {
-            ui.heading("Netskope Client Log Analyzer");
-            ui.label(RichText::new(&self.status_message).italics().color(Color32::GRAY));
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("📁 Open Log Files").clicked() {
-                    if let Some(files) = rfd::FileDialog::new()
-                        .add_filter("Log Files", &["log", "txt"])
-                        .pick_files()
-                    {
-                        self.load_file_paths(files);
-                    }
-                }
-
-                if !self.loaded_files.is_empty() {
-                    if ui.button("🗑 Clear All").clicked() {
-                        self.loaded_files.clear();
-                        self.all_records.clear();
-                        self.time_slots.clear();
-                        self.filtered_records.clear();
-                        self.activity_summary = ActivitySummary::default();
-                        self.anomalies.clear();
-                        self.status_message = "Drag and drop Netskope debug log files anywhere".to_string();
-                    }
-                }
-
-                ui.separator();
-                ui.label(format!(
-                    "Files loaded: {} | Total Log Entries: {}",
-                    self.loaded_files.len(),
-                    self.all_records.len()
-                ));
-            });
-
-            if !self.time_slots.is_empty() {
-                ui.add_space(8.0);
+    fn render_header(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        Frame::NONE
+            .inner_margin(Margin::same(12))
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Analysis Time Window (1-Hour Slot):").strong());
-                    let current_label = self
-                        .time_slots
-                        .get(self.selected_slot_index)
-                        .map(|s| s.label.as_str())
-                        .unwrap_or("Select a slot");
-
-                    let mut changed = false;
-                    egui::ComboBox::from_id_salt("time_slot_combo")
-                        .selected_text(current_label)
-                        .show_ui(ui, |ui| {
-                            for (idx, slot) in self.time_slots.iter().enumerate() {
-                                if ui
-                                    .selectable_value(&mut self.selected_slot_index, idx, &slot.label)
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
+                    ui.heading(RichText::new("Netskope Client Log Analyzer").strong().size(22.0));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mode_text = if self.dark_mode { "☀️ Light" } else { "🌙 Dark" };
+                        if ui.button(RichText::new(mode_text).strong()).clicked() {
+                            self.dark_mode = !self.dark_mode;
+                            if self.dark_mode {
+                                ctx.set_visuals(Visuals::dark());
+                            } else {
+                                ctx.set_visuals(Visuals::light());
                             }
-                        });
-
-                    if changed {
-                        self.reanalyze_selected_slot();
-                    }
+                        }
+                    });
                 });
-            }
-        });
+
+                ui.label(RichText::new(&self.status_message).italics().color(Color32::GRAY));
+
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("📁 Open Log Files").strong()).clicked() {
+                        if let Some(files) = rfd::FileDialog::new()
+                            .add_filter("Log Files", &["log", "txt", "json"])
+                            .pick_files()
+                        {
+                            self.load_file_paths(files);
+                        }
+                    }
+
+                    if !self.loaded_files.is_empty() {
+                        if ui.button("🗑 Clear All").clicked() {
+                            self.loaded_files.clear();
+                            self.all_records.clear();
+                            self.time_slots.clear();
+                            self.filtered_records.clear();
+                            self.activity_summary = ActivitySummary::default();
+                            self.anomalies.clear();
+                            self.status_message = "Drag and drop Netskope debug log files anywhere".to_string();
+                        }
+                    }
+
+                    ui.separator();
+                    ui.label(format!(
+                        "Files: {} | Total Entries: {}",
+                        self.loaded_files.len(),
+                        self.all_records.len()
+                    ));
+                });
+
+                if !self.time_slots.is_empty() {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("⏱ 1-Hour Time Window:").strong().size(15.0));
+                        let current_label = self
+                            .time_slots
+                            .get(self.selected_slot_index)
+                            .map(|s| s.label.as_str())
+                            .unwrap_or("Select a slot");
+
+                        let mut changed = false;
+                        egui::ComboBox::from_id_salt("time_slot_combo")
+                            .selected_text(RichText::new(current_label).strong())
+                            .show_ui(ui, |ui| {
+                                for (idx, slot) in self.time_slots.iter().enumerate() {
+                                    if ui
+                                        .selectable_value(&mut self.selected_slot_index, idx, &slot.label)
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                }
+                            });
+
+                        if changed {
+                            self.reanalyze_selected_slot();
+                        }
+                    });
+                }
+            });
     }
 
     fn render_tabs(&mut self, ui: &mut Ui) {
@@ -201,88 +243,109 @@ impl NetskopeLogAnalyzerApp {
     fn render_summary_tab(&self, ui: &mut Ui) {
         ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(8.0);
-            ui.heading("Client Activity Overview");
+            ui.heading(RichText::new("Client Activity Overview").strong().size(18.0));
             ui.label("Summary of Netskope client operations during the selected 1-hour window:");
 
-            ui.add_space(10.0);
+            ui.add_space(12.0);
+            let frame = Frame::NONE
+                .fill(ui.visuals().faint_bg_color)
+                .inner_margin(Margin::same(12))
+                .stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+
             ui.columns(4, |cols| {
-                cols[0].group(|ui| {
+                frame.show(&mut cols[0], |ui| {
                     ui.label(RichText::new("Total Logs").strong());
                     ui.heading(self.activity_summary.total_logs_in_slot.to_string());
                 });
-                cols[1].group(|ui| {
+                frame.show(&mut cols[1], |ui| {
                     ui.label(RichText::new("Errors / Crits").strong().color(Color32::RED));
                     ui.heading(
                         RichText::new(self.activity_summary.error_count.to_string())
                             .color(Color32::RED),
                     );
                 });
-                cols[2].group(|ui| {
+                frame.show(&mut cols[2], |ui| {
                     ui.label(RichText::new("Warnings").strong().color(Color32::YELLOW));
                     ui.heading(
                         RichText::new(self.activity_summary.warning_count.to_string())
                             .color(Color32::YELLOW),
                     );
                 });
-                cols[3].group(|ui| {
+                frame.show(&mut cols[3], |ui| {
                     ui.label(RichText::new("Detected Anomalies").strong().color(Color32::KHAKI));
                     ui.heading(self.anomalies.len().to_string());
                 });
             });
 
             ui.add_space(15.0);
-            ui.collapsing("🌐 Active Gateways / PoPs", |ui| {
-                if self.activity_summary.active_gateways.is_empty() {
-                    ui.label("No active gateways explicitly detected in this window.");
-                } else {
-                    for gw in &self.activity_summary.active_gateways {
-                        ui.label(format!("• {}", gw));
+
+            let card_frame = Frame::NONE
+                .fill(ui.visuals().faint_bg_color)
+                .inner_margin(Margin::same(12))
+                .stroke(Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+
+            card_frame.show(ui, |ui| {
+                ui.collapsing(RichText::new("🌐 Active Gateways / PoPs").strong().size(15.0), |ui| {
+                    if self.activity_summary.active_gateways.is_empty() {
+                        ui.label("No active gateways explicitly detected in this window.");
+                    } else {
+                        for gw in &self.activity_summary.active_gateways {
+                            ui.label(RichText::new(format!("• {}", gw)).monospace());
+                        }
                     }
-                }
+                });
             });
 
-            ui.add_space(10.0);
-            ui.collapsing("🔒 Tunnel Status Events", |ui| {
-                if self.activity_summary.tunnel_status_changes.is_empty() {
-                    ui.label("No tunnel state changes detected.");
-                } else {
-                    for (ts, msg) in &self.activity_summary.tunnel_status_changes {
-                        ui.label(format!("[{}] {}", ts.format("%H:%M:%S"), msg));
+            ui.add_space(8.0);
+            card_frame.show(ui, |ui| {
+                ui.collapsing(RichText::new("🔒 Tunnel Status Events").strong().size(15.0), |ui| {
+                    if self.activity_summary.tunnel_status_changes.is_empty() {
+                        ui.label("No tunnel state changes detected.");
+                    } else {
+                        for (ts, msg) in &self.activity_summary.tunnel_status_changes {
+                            ui.label(RichText::new(format!("[{}] {}", ts.format("%H:%M:%S"), msg)).monospace());
+                        }
                     }
-                }
+                });
             });
 
-            ui.add_space(10.0);
-            ui.collapsing("🛣 Steering & Routing Events", |ui| {
-                if self.activity_summary.steering_events.is_empty() {
-                    ui.label("No steering events detected.");
-                } else {
-                    for (ts, msg) in &self.activity_summary.steering_events {
-                        ui.label(format!("[{}] {}", ts.format("%H:%M:%S"), msg));
+            ui.add_space(8.0);
+            card_frame.show(ui, |ui| {
+                ui.collapsing(RichText::new("🛣 Steering & Routing Events").strong().size(15.0), |ui| {
+                    if self.activity_summary.steering_events.is_empty() {
+                        ui.label("No steering events detected.");
+                    } else {
+                        for (ts, msg) in &self.activity_summary.steering_events {
+                            ui.label(RichText::new(format!("[{}] {}", ts.format("%H:%M:%S"), msg)).monospace());
+                        }
                     }
-                }
+                });
             });
 
-            ui.add_space(10.0);
-            ui.collapsing("🔑 Authentication & SSO Events", |ui| {
-                if self.activity_summary.auth_events.is_empty() {
-                    ui.label("No auth events detected.");
-                } else {
-                    for (ts, msg) in &self.activity_summary.auth_events {
-                        ui.label(format!("[{}] {}", ts.format("%H:%M:%S"), msg));
+            ui.add_space(8.0);
+            card_frame.show(ui, |ui| {
+                ui.collapsing(RichText::new("🔑 Authentication & SSO Events").strong().size(15.0), |ui| {
+                    if self.activity_summary.auth_events.is_empty() {
+                        ui.label("No auth events detected.");
+                    } else {
+                        for (ts, msg) in &self.activity_summary.auth_events {
+                            ui.label(RichText::new(format!("[{}] {}", ts.format("%H:%M:%S"), msg)).monospace());
+                        }
                     }
-                }
+                });
             });
 
-            ui.add_space(10.0);
-            ui.collapsing("⚙ Config & Policy Updates", |ui| {
-                if self.activity_summary.config_updates.is_empty() {
-                    ui.label("No config updates detected.");
-                } else {
-                    for (ts, msg) in &self.activity_summary.config_updates {
-                        ui.label(format!("[{}] {}", ts.format("%H:%M:%S"), msg));
+            ui.add_space(8.0);
+            card_frame.show(ui, |ui| {
+                ui.collapsing(RichText::new("⚙ Config & Policy Updates").strong().size(15.0), |ui| {
+                    if self.activity_summary.config_updates.is_empty() {
+                        ui.label("No config updates detected.");
+                    } else {
+                        for (ts, msg) in &self.activity_summary.config_updates {
+                            ui.label(RichText::new(format!("[{}] {}", ts.format("%H:%M:%S"), msg)).monospace());
+                        }
                     }
-                }
+                });
             });
         });
     }
@@ -448,16 +511,21 @@ impl eframe::App for NetskopeLogAnalyzerApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.render_header(ui);
+            self.render_header(ui, ctx);
             ui.add_space(10.0);
 
             if self.all_records.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.group(|ui| {
-                        ui.heading("📂 Drag & Drop Netskope Log Files Here");
-                        ui.label("Supported log formats include Netskope client debug logs (e.g. nsdebuglog.log).");
-                        ui.label("You can also click 'Open Log Files' above.");
-                    });
+                    Frame::NONE
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(Margin::same(30))
+                        .stroke(Stroke::new(1.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                        .show(ui, |ui| {
+                            ui.heading(RichText::new("📂 Drag & Drop Netskope Log Files Here").size(20.0).strong());
+                            ui.add_space(8.0);
+                            ui.label("Supported log formats include Netskope client debug logs (nsdebuglog.log), NPA logs (npadebuglog.log), and config JSON.");
+                            ui.label("Or click '📁 Open Log Files' above to browse from your computer.");
+                        });
                 });
             } else {
                 self.render_tabs(ui);
