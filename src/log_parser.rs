@@ -5,10 +5,17 @@ use std::sync::OnceLock;
 use crate::models::{LogLevel, LogRecord};
 
 static LOG_REGEX: OnceLock<Regex> = OnceLock::new();
+static NPA_LOG_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn get_log_regex() -> &'static Regex {
     LOG_REGEX.get_or_init(|| {
-        Regex::new(r"^(?P<year>\d{4})[/-](?P<month>\d{2})[/-](?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<min>\d{2}):(?P<sec>\d{2})(?:\.(?P<ms>\d+))?\s+\[?(?P<level>[A-Za-z]+)\]?\s+(?:\[?(?P<pid>\d+):(?P<tid>\d+)\]?)?\s*(?:\[(?P<module>[^\]]+)\])?\s*(?P<msg>.*)$").unwrap()
+        Regex::new(r"^(?P<year>\d{4})[/-](?P<month>\d{2})[/-](?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<min>\d{2}):(?P<sec>\d{2})(?:\.(?P<ms>\d+))?\s+(?:\S+\s+p\d+\s+t\d+\s+)?\[?(?P<level>[A-Za-z]+)\]?\s+(?:\[?(?P<pid>\d+):(?P<tid>\d+)\]?)?\s*(?:\[(?P<module>[^\]]+)\])?\s*(?P<msg>.*)$").unwrap()
+    })
+}
+
+fn get_npa_log_regex() -> &'static Regex {
+    NPA_LOG_REGEX.get_or_init(|| {
+        Regex::new(r"^\[[^:]+:(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})\s+(?P<hour>\d{2}):(?P<min>\d{2}):(?P<sec>\d{2})(?:\.(?P<ms>\d+))?\s+[^\]]+\]\s+(?:t(?P<tid>[a-fA-F0-9]+)\s+)?\[(?P<level>[^\]]+)\]\s*(?P<msg>.*)$").unwrap()
     })
 }
 
@@ -20,7 +27,10 @@ pub fn parse_log_line(file_name: &str, line_number: usize, line: &str) -> Option
 
     let re = get_log_regex();
 
-    if let Some(caps) = re.captures(trimmed) {
+    let npa_re = get_npa_log_regex();
+    let caps_opt = re.captures(trimmed).or_else(|| npa_re.captures(trimmed));
+
+    if let Some(caps) = caps_opt {
         let year: i32 = caps.name("year")?.as_str().parse().ok()?;
         let month: u32 = caps.name("month")?.as_str().parse().ok()?;
         let day: u32 = caps.name("day")?.as_str().parse().ok()?;
@@ -36,18 +46,18 @@ pub fn parse_log_line(file_name: &str, line_number: usize, line: &str) -> Option
             .and_hms_nano_opt(hour, min, sec, nano)?;
 
         let level_str = caps.name("level").map(|m| m.as_str()).unwrap_or("INFO");
-        let level = match level_str.to_uppercase().as_str() {
-            "TRACE" | "VERBOSE" => LogLevel::Trace,
-            "DEBUG" | "DBG" => LogLevel::Debug,
-            "INFO" | "INF" | "NOTICE" => LogLevel::Info,
-            "WARN" | "WARNING" | "WRN" => LogLevel::Warning,
-            "ERR" | "ERROR" => LogLevel::Error,
-            "CRIT" | "CRITICAL" | "FATAL" => LogLevel::Critical,
-            _ => LogLevel::Unknown,
+        let level = match level_str.to_lowercase().as_str() {
+            "trace" | "verbose" => LogLevel::Trace,
+            "debug" | "dbg" => LogLevel::Debug,
+            "info" | "inf" | "notice" => LogLevel::Info,
+            "warn" | "warning" | "wrn" => LogLevel::Warning,
+            "err" | "error" => LogLevel::Error,
+            "crit" | "critical" | "fatal" => LogLevel::Critical,
+            _ => LogLevel::Info, // NPA logs often put tag/category in [tag], fallback to Info for unrecognized
         };
 
         let pid = caps.name("pid").and_then(|m| m.as_str().parse().ok());
-        let tid = caps.name("tid").and_then(|m| m.as_str().parse().ok());
+        let tid = caps.name("tid").and_then(|m| m.as_str().parse::<u32>().ok().or_else(|| u32::from_str_radix(m.as_str(), 16).ok()));
         let module = caps.name("module").map(|m| m.as_str().trim().to_string());
         let message = caps.name("msg").map(|m| m.as_str().trim().to_string()).unwrap_or_default();
 
@@ -143,5 +153,16 @@ mod tests {
         assert_eq!(rec.timestamp.to_string(), "2026-10-19 08:03:33.208536");
         assert_eq!(rec.level, LogLevel::Info);
         assert_eq!(rec.message, "Microsecond log line");
+    }
+
+    #[test]
+    fn test_parse_npa_log_line() {
+        let line = "[JFJJTW4302:2026-10-17 02:51:43.097 +02:00] t14cf603 [info] npaGWSelection.cpp:551:getNpaGatewayList():0x0 GW FQDN = gateway.npa.goskope.com";
+        let rec = parse_log_line("npadebuglog.log", 1, line).expect("Should parse NPA log line");
+
+        assert_eq!(rec.file_name, "npadebuglog.log");
+        assert_eq!(rec.timestamp.to_string(), "2026-10-17 02:51:43.097");
+        assert_eq!(rec.level, LogLevel::Info);
+        assert!(rec.message.contains("GW FQDN = gateway.npa.goskope.com"));
     }
 }
