@@ -20,6 +20,12 @@ pub enum Tab {
     LogExplorer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeTarget {
+    Start,
+    End,
+}
+
 pub struct NetskopeLogAnalyzerApp {
     loaded_files: Vec<PathBuf>,
     all_records: Vec<LogRecord>,
@@ -33,6 +39,7 @@ pub struct NetskopeLogAnalyzerApp {
     level_filter: Option<LogLevel>,
     start_time_filter: String,
     end_time_filter: String,
+    active_time_target: TimeTarget,
     status_message: String,
     dark_mode: bool,
 }
@@ -73,6 +80,7 @@ impl NetskopeLogAnalyzerApp {
             level_filter: None,
             start_time_filter: String::new(),
             end_time_filter: String::new(),
+            active_time_target: TimeTarget::Start,
             status_message: "Drag and drop Netskope debug log files anywhere or click 'Open Log Files'".to_string(),
             dark_mode: true,
         }
@@ -472,8 +480,13 @@ impl NetskopeLogAnalyzerApp {
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("⏱ Start Time:").strong());
-            ui.add(egui::TextEdit::singleline(&mut self.start_time_filter).hint_text("HH:MM:SS"));
+            let start_active = self.active_time_target == TimeTarget::Start;
+            let start_label = if start_active { "⏱ Start Time (Target):" } else { "⏱ Start Time:" };
+            ui.label(RichText::new(start_label).strong().color(if start_active { Color32::LIGHT_BLUE } else { ui.visuals().text_color() }));
+            let start_res = ui.add(egui::TextEdit::singleline(&mut self.start_time_filter).hint_text("HH:MM:SS"));
+            if start_res.has_focus() || start_res.clicked() {
+                self.active_time_target = TimeTarget::Start;
+            }
             if !self.start_time_filter.is_empty() {
                 if ui.small_button("✖").clicked() {
                     self.start_time_filter.clear();
@@ -481,8 +494,13 @@ impl NetskopeLogAnalyzerApp {
             }
 
             ui.add_space(10.0);
-            ui.label(RichText::new("⏱ End Time:").strong());
-            ui.add(egui::TextEdit::singleline(&mut self.end_time_filter).hint_text("HH:MM:SS"));
+            let end_active = self.active_time_target == TimeTarget::End;
+            let end_label = if end_active { "⏱ End Time (Target):" } else { "⏱ End Time:" };
+            ui.label(RichText::new(end_label).strong().color(if end_active { Color32::LIGHT_BLUE } else { ui.visuals().text_color() }));
+            let end_res = ui.add(egui::TextEdit::singleline(&mut self.end_time_filter).hint_text("HH:MM:SS"));
+            if end_res.has_focus() || end_res.clicked() {
+                self.active_time_target = TimeTarget::End;
+            }
             if !self.end_time_filter.is_empty() {
                 if ui.small_button("✖").clicked() {
                     self.end_time_filter.clear();
@@ -490,7 +508,25 @@ impl NetskopeLogAnalyzerApp {
             }
 
             ui.separator();
-            ui.label(RichText::new("Filter format: HH:MM:SS or HH:MM").italics().color(Color32::GRAY));
+            ui.label(RichText::new("Quick End Time:").strong());
+            if ui.button("+5m").clicked() {
+                if let Some(st) = self.parse_time_filter(&self.start_time_filter) {
+                    let et = st + chrono::Duration::minutes(5);
+                    self.end_time_filter = et.format("%H:%M:%S").to_string();
+                }
+            }
+            if ui.button("+15m").clicked() {
+                if let Some(st) = self.parse_time_filter(&self.start_time_filter) {
+                    let et = st + chrono::Duration::minutes(15);
+                    self.end_time_filter = et.format("%H:%M:%S").to_string();
+                }
+            }
+            if ui.button("+30m").clicked() {
+                if let Some(st) = self.parse_time_filter(&self.start_time_filter) {
+                    let et = st + chrono::Duration::minutes(30);
+                    self.end_time_filter = et.format("%H:%M:%S").to_string();
+                }
+            }
         });
 
         ui.add_space(8.0);
@@ -535,6 +571,9 @@ impl NetskopeLogAnalyzerApp {
 
         ui.label(format!("Showing {} log lines", records_to_show.len()));
 
+        let target_is_end = self.active_time_target == TimeTarget::End;
+        let mut time_to_set = None;
+
         ScrollArea::both().show(ui, |ui| {
             for record in records_to_show {
                 let color = match record.level {
@@ -545,7 +584,7 @@ impl NetskopeLogAnalyzerApp {
                     LogLevel::Unknown => Color32::WHITE,
                 };
 
-                ui.horizontal(|ui| {
+                let row_res = ui.horizontal(|ui| {
                     ui.label(RichText::new(record.timestamp.format("%H:%M:%S%.3f").to_string()).monospace());
                     ui.label(
                         RichText::new(format!("[{:7}]", record.level.as_str()))
@@ -557,9 +596,21 @@ impl NetskopeLogAnalyzerApp {
                         ui.label(RichText::new(format!("[{}]", mod_str)).monospace().color(Color32::KHAKI));
                     }
                     ui.label(RichText::new(&record.message).monospace());
-                });
+                }).response;
+
+                if row_res.interact(egui::Sense::click()).clicked() {
+                    time_to_set = Some(record.timestamp.format("%H:%M:%S").to_string());
+                }
             }
         });
+
+        if let Some(ts_str) = time_to_set {
+            if target_is_end {
+                self.end_time_filter = ts_str;
+            } else {
+                self.start_time_filter = ts_str;
+            }
+        }
     }
 }
 
