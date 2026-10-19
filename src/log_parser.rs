@@ -28,11 +28,12 @@ pub fn parse_log_line(file_name: &str, line_number: usize, line: &str) -> Option
         let min: u32 = caps.name("min")?.as_str().parse().ok()?;
         let sec: u32 = caps.name("sec")?.as_str().parse().ok()?;
 
-        let ms_str = caps.name("ms").map(|m| m.as_str()).unwrap_or("0");
-        let milli: u32 = ms_str.parse().unwrap_or(0);
+        let sub_str = caps.name("ms").map(|m| m.as_str()).unwrap_or("0");
+        let padded = format!("{:0<9}", &sub_str[..sub_str.len().min(9)]);
+        let nano: u32 = padded.parse().unwrap_or(0);
 
         let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)?
-            .and_hms_milli_opt(hour, min, sec, milli)?;
+            .and_hms_nano_opt(hour, min, sec, nano)?;
 
         let level_str = caps.name("level").map(|m| m.as_str()).unwrap_or("INFO");
         let level = match level_str.to_uppercase().as_str() {
@@ -132,5 +133,15 @@ mod tests {
         assert_eq!(records[0].level, LogLevel::Error);
         assert!(records[0].message.contains("Token validation failed"));
         assert!(records[0].message.contains("HTTP 401 Unauthorized"));
+    }
+
+    #[test]
+    fn test_parse_microsecond_timestamp() {
+        let line = "2026/10/19 08:03:33.208536 [INFO] [1000:2000] [stunnel] Microsecond log line";
+        let rec = parse_log_line("test.log", 1, line).expect("Should parse microsecond log line");
+
+        assert_eq!(rec.timestamp.to_string(), "2026-10-19 08:03:33.208536");
+        assert_eq!(rec.level, LogLevel::Info);
+        assert_eq!(rec.message, "Microsecond log line");
     }
 }
